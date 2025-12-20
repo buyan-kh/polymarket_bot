@@ -81,6 +81,47 @@ class Inventory:
         payout = min_qty * 1.0
         return payout - matched_cost
     
+    @property
+    def unhedged_qty(self) -> float:
+        """Quantity of unhedged shares (excess on one side)."""
+        return abs(self.yes.quantity - self.no.quantity)
+    
+    @property
+    def unhedged_side(self) -> str:
+        """Which side has excess unhedged shares, or 'NONE' if balanced."""
+        if self.yes.quantity > self.no.quantity:
+            return "YES"
+        elif self.no.quantity > self.yes.quantity:
+            return "NO"
+        return "NONE"
+    
+    @property
+    def unhedged_cost(self) -> float:
+        """Cost basis of the unhedged shares."""
+        if self.unhedged_side == "YES":
+            return self.unhedged_qty * self.yes.avg_cost
+        elif self.unhedged_side == "NO":
+            return self.unhedged_qty * self.no.avg_cost
+        return 0.0
+    
+    @property
+    def unhedged_at_risk(self) -> float:
+        """
+        Maximum potential loss from unhedged shares.
+        If the opposite side wins, unhedged shares become worthless.
+        """
+        return self.unhedged_cost  # Full cost is at risk
+    
+    @property
+    def unhedged_potential_gain(self) -> float:
+        """
+        Potential gain if unhedged side wins.
+        Unhedged shares pay $1.00 each minus their cost.
+        """
+        if self.unhedged_qty <= 0:
+            return 0.0
+        return self.unhedged_qty * 1.0 - self.unhedged_cost
+    
     def reset(self) -> None:
         """Clear all positions."""
         self.yes.reset()
@@ -206,5 +247,10 @@ class StateMachine:
             "no_avg_cost": self.inventory.no.avg_cost,
             "total_cost": self.inventory.total_cost,
             "locked_profit": self.inventory.locked_profit,
+            "unhedged_qty": self.inventory.unhedged_qty,
+            "unhedged_side": self.inventory.unhedged_side,
+            "unhedged_at_risk": self.inventory.unhedged_at_risk,
+            "unhedged_potential_gain": self.inventory.unhedged_potential_gain,
             "transitions": self._transition_count,
         }
+

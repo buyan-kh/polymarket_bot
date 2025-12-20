@@ -109,7 +109,8 @@ class LeggedArbBot:
         
         # If we're now locked, record the profit
         if new_state == BotState.LOCKED:
-            profit = self.state_machine.inventory.locked_profit * qty
+            # locked_profit already returns total USD profit for matched pairs
+            profit = self.state_machine.inventory.locked_profit
             self.risk_limits.record_pnl(profit)
             logger.info(f"🔒 LOCKED! Profit: ${profit:.4f}")
             
@@ -349,9 +350,11 @@ class LeggedArbBot:
             )
         else:
             # Place aggressive bid at our max price
-            await self._place_bid(OrderSide.NO, max_bid_no)
+            # IMPORTANT: Match the first leg quantity for balanced hedge
+            hedge_qty = self.state_machine.inventory.yes.quantity
+            await self._place_bid(OrderSide.NO, max_bid_no, size=hedge_qty)
             logger.info(
-                f"🪤 TRAPPER: Bid NO @ {max_bid_no:.4f} "
+                f"🪤 TRAPPER: Bid NO @ {max_bid_no:.4f} x {hedge_qty:.2f} "
                 f"(YES cost: {cost_basis_yes:.4f})"
             )
     
@@ -380,9 +383,11 @@ class LeggedArbBot:
                 self.state_machine.inventory.no.quantity
             )
         else:
-            await self._place_bid(OrderSide.YES, max_bid_yes)
+            # IMPORTANT: Match the first leg quantity for balanced hedge
+            hedge_qty = self.state_machine.inventory.no.quantity
+            await self._place_bid(OrderSide.YES, max_bid_yes, size=hedge_qty)
             logger.info(
-                f"🪤 TRAPPER: Bid YES @ {max_bid_yes:.4f} "
+                f"🪤 TRAPPER: Bid YES @ {max_bid_yes:.4f} x {hedge_qty:.2f} "
                 f"(NO cost: {cost_basis_no:.4f})"
             )
     
@@ -396,11 +401,22 @@ class LeggedArbBot:
         self._active_orders = {OrderSide.YES: None, OrderSide.NO: None}
         
         summary = self.state_machine.get_summary()
-        logger.info(
+        
+        # Base vault message
+        vault_msg = (
             f"🏦 VAULT: Profit locked @ ${summary['locked_profit']:.4f} | "
             f"YES: {summary['yes_qty']:.2f}@{summary['yes_avg_cost']:.4f} | "
             f"NO: {summary['no_qty']:.2f}@{summary['no_avg_cost']:.4f}"
         )
+        
+        # Add unhedged exposure warning if imbalanced
+        if summary['unhedged_qty'] > 0.01:  # Small tolerance for float rounding
+            vault_msg += (
+                f" | ⚠️ UNHEDGED: {summary['unhedged_qty']:.2f} {summary['unhedged_side']} "
+                f"(Risk: -${summary['unhedged_at_risk']:.2f} / Gain: +${summary['unhedged_potential_gain']:.2f})"
+            )
+        
+        logger.info(vault_msg)
     
     async def run(self, tick_interval: float = 1.0) -> None:
         """
