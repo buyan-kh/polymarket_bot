@@ -1,0 +1,24 @@
+python main.py --paper --discover --asset BTC
+
+
+Flag	Description
+--paper	Paper trading mode (no real orders) - default
+--live	Live trading mode (real orders)
+--discover	Auto-discover available 15-minute markets
+--asset BTC/ETH	Asset to trade (default: BTC)
+--list	List all available markets and exit
+--continuous	Keep running, auto-move to next market cycle
+--hours 10	Run for X hours then stop
+--report LOG_FILE	View a saved session report
+
+# Paper trade BTC with auto-discovery
+python main.py --paper --discover
+
+# List available markets
+python main.py --list
+
+# Run continuously for 10 hours in paper mode
+python main.py --paper --discover --continuous --hours 10
+
+# View a past session report
+python main.py --report trade_logs/session_20251215_210005.json

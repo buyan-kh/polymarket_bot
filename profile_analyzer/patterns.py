@@ -95,8 +95,17 @@ class AnalysisResult:
     market_concentration: float  # Herfindahl index (0-1, higher = more concentrated)
 
 
-def _parse_ts(ts_str: str) -> Optional[datetime]:
-    """Parse a timestamp string to datetime."""
+def _parse_ts(ts_input) -> Optional[datetime]:
+    """Parse a timestamp (string or int/float) to datetime."""
+    if ts_input is None:
+        return None
+    # Handle numeric timestamps (unix epoch)
+    if isinstance(ts_input, (int, float)):
+        try:
+            return datetime.fromtimestamp(ts_input, tz=timezone.utc)
+        except (ValueError, OSError):
+            return None
+    ts_str = str(ts_input)
     if not ts_str:
         return None
     try:
@@ -132,7 +141,7 @@ def _stddev(values: list[float]) -> float:
     return variance ** 0.5
 
 
-def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "") -> AnalysisResult:
+def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", trades_capped: bool = False) -> AnalysisResult:
     """
     Run full pattern analysis on a list of trades.
     """
@@ -204,10 +213,14 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "") 
 
     num_days = (trade_dates[-1] - trade_dates[0]).days + 1 if len(trade_dates) > 1 else 1
 
+    # Don't compute trades/day when capped — the date range only covers
+    # the most recent trades and the result would be wildly misleading.
+    avg_per_day = 0.0 if trades_capped else len(trades) / max(num_days, 1)
+
     timing = TimingPattern(
         most_active_hours=most_active_hours,
         most_active_days=most_active_days,
-        avg_trades_per_day=len(trades) / max(num_days, 1),
+        avg_trades_per_day=avg_per_day,
         busiest_date=busiest_date,
         busiest_date_count=busiest_count,
         trading_streak_days=max_streak,

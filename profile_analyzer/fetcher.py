@@ -81,33 +81,56 @@ async def resolve_profile(profile_input: str, session: aiohttp.ClientSession) ->
     else:
         username = profile_input
 
-    # Fetch profile page to get wallet address
+    # Fetch profile page and extract wallet from __NEXT_DATA__ JSON
     url = f"https://polymarket.com/@{username}"
     async with session.get(url) as resp:
         if resp.status != 200:
             raise ValueError(f"Could not fetch profile page for '{username}' (HTTP {resp.status})")
         html = await resp.text()
 
-    # Extract wallet address from page source (look for 0x address pattern in JSON data)
-    # Polymarket embeds user data in __NEXT_DATA__ script tag
-    wallet_match = re.search(r'"proxyWallets":\["(0x[a-fA-F0-9]{40})"', html)
-    if not wallet_match:
-        # Try alternate patterns
-        wallet_match = re.search(r'"address":"(0x[a-fA-F0-9]{40})"', html)
-    if not wallet_match:
-        # Try the data API directly
-        wallet_match = re.search(r'"walletAddress":"(0x[a-fA-F0-9]{40})"', html)
-    if not wallet_match:
-        # Search for any 0x address near the username context
-        wallet_match = re.search(r'(0x[a-fA-F0-9]{40})', html)
-    if not wallet_match:
-        raise ValueError(
-            f"Could not find wallet address for '{username}'. "
-            "Try providing the wallet address directly (0x...)."
-        )
+    # Parse __NEXT_DATA__ script tag which contains the user's profile data
+    next_data_match = re.search(
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL
+    )
+    if next_data_match:
+        try:
+            next_data = json.loads(next_data_match.group(1))
+            # Walk through dehydrated queries to find the profile query
+            queries = (
+                next_data.get("props", {})
+                .get("pageProps", {})
+                .get("dehydratedState", {})
+                .get("queries", [])
+            )
+            for query in queries:
+                data = query.get("state", {}).get("data", {})
+                if isinstance(data, dict):
+                    # Profile query returns a dict with wallet fields
+                    for key in ("proxyWallet", "primaryAddress", "baseAddress", "user"):
+                        addr = data.get(key, "")
+                        if re.match(r"^0x[a-fA-F0-9]{40}$", addr):
+                            return UserProfile(
+                                username=username, wallet_address=addr.lower()
+                            )
+        except (json.JSONDecodeError, TypeError):
+            pass
 
-    wallet = wallet_match.group(1).lower()
-    return UserProfile(username=username, wallet_address=wallet)
+    # Fallback: search for known wallet-address keys in the raw HTML
+    for pattern in [
+        r'"proxyWallet":"(0x[a-fA-F0-9]{40})"',
+        r'"primaryAddress":"(0x[a-fA-F0-9]{40})"',
+        r'"user":"(0x[a-fA-F0-9]{40})"',
+    ]:
+        wallet_match = re.search(pattern, html)
+        if wallet_match:
+            return UserProfile(
+                username=username, wallet_address=wallet_match.group(1).lower()
+            )
+
+    raise ValueError(
+        f"Could not find wallet address for '{username}'. "
+        "Try providing the wallet address directly (0x...)."
+    )
 
 
 async def fetch_all_trades(
@@ -116,14 +139,18 @@ async def fetch_all_trades(
     limit: int = 1000,
     max_trades: Optional[int] = None,
     progress_callback=None,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """
     Fetch all trades for a wallet address from the Polymarket Data API.
     Uses offset-based pagination.
+
+    Returns (trades, trades_capped) where trades_capped is True if the API
+    pagination limit was hit and there may be more trades.
     """
     all_trades = []
     offset = 0
     batch_size = min(limit, 10000)
+    trades_capped = False
 
     while True:
         params = {
@@ -144,6 +171,12 @@ async def fetch_all_trades(
                         await asyncio.sleep(wait)
                         retry_count += 1
                         continue
+                    if resp.status == 400:
+                        # API returns 400 at high offsets; treat as end of data
+                        if progress_callback:
+                            progress_callback(f"Reached API pagination limit at offset {offset}")
+                        trades_capped = True
+                        return all_trades, trades_capped
                     if resp.status != 200:
                         raise Exception(f"API error: HTTP {resp.status}")
                     data = await resp.json()
@@ -174,7 +207,7 @@ async def fetch_all_trades(
         # Be polite to the API
         await asyncio.sleep(0.3)
 
-    return all_trades
+    return all_trades, trades_capped
 
 
 def parse_trades(raw_trades: list[dict]) -> list[Trade]:
@@ -224,13 +257,14 @@ async def fetch_and_cache(
     profile_input: str,
     max_trades: Optional[int] = None,
     progress_callback=None,
-) -> tuple[UserProfile, list[Trade], Path]:
+) -> tuple[UserProfile, list[Trade], Path, bool]:
     """
     Full pipeline: resolve profile -> fetch trades -> parse -> cache.
-    Returns (profile, trades, cache_filepath).
+    Returns (profile, trades, cache_filepath, trades_capped).
     """
     timeout = aiohttp.ClientTimeout(total=300)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    headers = {"Accept-Encoding": "gzip, deflate"}
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
         if progress_callback:
             progress_callback("Resolving profile...")
 
@@ -240,7 +274,7 @@ async def fetch_and_cache(
             progress_callback(f"Found wallet: {profile.wallet_address}")
             progress_callback("Fetching trades...")
 
-        raw_trades = await fetch_all_trades(
+        raw_trades, trades_capped = await fetch_all_trades(
             profile.wallet_address,
             session,
             max_trades=max_trades,
@@ -256,4 +290,4 @@ async def fetch_and_cache(
         if progress_callback:
             progress_callback(f"Saved to {cache_path}")
 
-        return profile, trades, cache_path
+        return profile, trades, cache_path, trades_capped
