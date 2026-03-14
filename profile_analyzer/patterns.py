@@ -93,6 +93,18 @@ class AnalysisResult:
     outcome_preference: dict  # Yes/No -> count
     avg_trades_per_market: float
     market_concentration: float  # Herfindahl index (0-1, higher = more concentrated)
+    # --- New fields for deeper alpha analysis ---
+    avg_entry_price: float = 0.0  # overall average buy price
+    avg_exit_price: float = 0.0  # overall average sell price
+    buy_sell_spread: float = 0.0  # avg_exit - avg_entry (edge measure)
+    top_market_win_rate: float = 0.0  # % of top 10 markets (by volume) that are profitable
+    top_market_results: list = field(default_factory=list)  # [(title, pnl, volume)] for top 10
+    pct_extreme_buys: float = 0.0  # % of buys at < 0.20 or > 0.80
+    extreme_buy_markets: list = field(default_factory=list)  # markets with extreme-price entries
+    sizing_cv: float = 0.0  # coefficient of variation for position sizes (stddev/mean)
+    category_pnl: dict = field(default_factory=dict)  # category -> estimated pnl
+    concentrated_market_pnl: float = 0.0  # total pnl of top 3 markets by volume
+    total_estimated_pnl: float = 0.0  # sum of all market estimated_pnl
 
 
 def _parse_ts(ts_input) -> Optional[datetime]:
@@ -335,6 +347,63 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
         sorted_ts[-1].isoformat() if sorted_ts else "N/A",
     )
 
+    # --- New alpha-analysis fields ---
+
+    # Average entry/exit prices and spread
+    avg_entry = sum(buy_prices) / len(buy_prices) if buy_prices else 0.0
+    avg_exit = sum(sell_prices) / len(sell_prices) if sell_prices else 0.0
+    buy_sell_spread = avg_exit - avg_entry
+
+    # Top market win rate (% of top 10 by volume that are profitable)
+    top_10 = market_list[:10]
+    top_market_results = [(m.title, m.estimated_pnl, m.total_volume) for m in top_10]
+    profitable_top = sum(1 for m in top_10 if m.estimated_pnl > 0)
+    top_market_win_rate = (profitable_top / len(top_10) * 100) if top_10 else 0.0
+
+    # Extreme buys (< 0.20 or > 0.80)
+    extreme_buys = [p for p in buy_prices if p < 0.20 or p > 0.80]
+    pct_extreme = (len(extreme_buys) / len(buy_prices) * 100) if buy_prices else 0.0
+
+    # Markets where extreme-price entries happened
+    extreme_market_ids = set()
+    for t in trades:
+        if t.side == "BUY" and t.price > 0 and (t.price < 0.20 or t.price > 0.80):
+            extreme_market_ids.add(t.condition_id or t.slug)
+    extreme_buy_market_data = []
+    for mid in extreme_market_ids:
+        if mid in markets:
+            m = markets[mid]
+            extreme_buy_market_data.append((m.title, m.estimated_pnl, m.total_volume))
+
+    # Sizing coefficient of variation
+    avg_size = sum(sizes) / len(sizes) if sizes else 0.0
+    std_size = _stddev(sizes)
+    sizing_cv = std_size / avg_size if avg_size > 0 else 0.0
+
+    # Category PnL - map each market to its category and sum pnl
+    cat_pnl: dict[str, float] = defaultdict(float)
+    for m in market_list:
+        title_lower = (m.title or "").lower()
+        if any(w in title_lower for w in ["bitcoin", "btc", "crypto", "eth", "ethereum", "solana", "sol"]):
+            cat = "Crypto"
+        elif any(w in title_lower for w in ["trump", "biden", "president", "election", "congress", "senate", "governor"]):
+            cat = "Politics"
+        elif any(w in title_lower for w in ["nfl", "nba", "mlb", "sports", "game", "match", "score", "super bowl"]):
+            cat = "Sports"
+        elif any(w in title_lower for w in ["fed", "cpi", "gdp", "inflation", "rate", "economy", "jobs", "unemployment"]):
+            cat = "Economics"
+        elif any(w in title_lower for w in ["weather", "hurricane", "earthquake", "temperature"]):
+            cat = "Weather"
+        elif any(w in title_lower for w in ["up or down", "above", "below", "price"]):
+            cat = "Price Prediction"
+        else:
+            cat = "Other"
+        cat_pnl[cat] += m.estimated_pnl
+
+    # Concentrated market PnL (top 3 markets)
+    concentrated_pnl = sum(m.estimated_pnl for m in market_list[:3])
+    total_est_pnl = sum(m.estimated_pnl for m in market_list)
+
     return AnalysisResult(
         username=username,
         wallet=wallet,
@@ -356,4 +425,15 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
         outcome_preference=dict(outcome_counts.most_common()),
         avg_trades_per_market=len(trades) / max(len(markets), 1),
         market_concentration=hhi,
+        avg_entry_price=avg_entry,
+        avg_exit_price=avg_exit,
+        buy_sell_spread=buy_sell_spread,
+        top_market_win_rate=top_market_win_rate,
+        top_market_results=top_market_results,
+        pct_extreme_buys=pct_extreme,
+        extreme_buy_markets=extreme_buy_market_data,
+        sizing_cv=sizing_cv,
+        category_pnl=dict(cat_pnl),
+        concentrated_market_pnl=concentrated_pnl,
+        total_estimated_pnl=total_est_pnl,
     )
