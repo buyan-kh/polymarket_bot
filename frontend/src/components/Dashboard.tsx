@@ -55,7 +55,7 @@ export default function Dashboard({ data, onReset }: Props) {
 
   const profileUrl = profile.username
     ? `https://polymarket.com/@${profile.username}`
-    : `https://polymarket.com/portfolio/${profile.wallet}`;
+    : null;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-8">
@@ -73,18 +73,26 @@ export default function Dashboard({ data, onReset }: Props) {
           </button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-3">
-              <a href={profileUrl} target="_blank" rel="noopener noreferrer"
-                className="stat-value hover:brightness-125 transition-all"
-                title="View on Polymarket">
-                @{profile.username || profile.wallet.slice(0, 10)}
-              </a>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                style={{ color: "var(--text-muted)", marginTop: "2px" }}>
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                <polyline points="15 3 21 3 21 9" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
+              {profileUrl ? (
+                <>
+                  <a href={profileUrl} target="_blank" rel="noopener noreferrer"
+                    className="stat-value hover:brightness-125 transition-all"
+                    title="View on Polymarket">
+                    @{profile.username || profile.wallet.slice(0, 10)}
+                  </a>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    style={{ color: "var(--text-muted)", marginTop: "2px" }}>
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                </>
+              ) : (
+                <span className="stat-value">
+                  @{profile.wallet.slice(0, 10)}
+                </span>
+              )}
             </h1>
             <p className="text-sm mt-0.5" style={{
               color: "var(--text-muted)",
