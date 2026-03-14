@@ -45,6 +45,7 @@ export interface AnalyzeResponse {
   backtest: BacktestData | null;
   baseline: BaselineData | null;
   report: ReportData;
+  strategy: StrategyProfileData;
 }
 
 export interface MarketSummary {
@@ -113,4 +114,51 @@ export interface ProCon {
   observation: string;
   detail: string;
   severity: "info" | "warning" | "critical";
+}
+
+export interface EdgeStats {
+  trades: number;
+  pnl: number;
+  win_rate: number;
+}
+
+export interface StrategyProfileData {
+  strategy_type: string;
+  confidence: number;
+  avg_entry_price: number;
+  entry_price_distribution: Record<string, number>;
+  prefers_underdogs: boolean;
+  prefers_favorites: boolean;
+  avg_time_in_market: number;
+  quick_flipper: boolean;
+  long_holder: boolean;
+  edge_by_category: Record<string, EdgeStats>;
+  edge_by_price_range: Record<string, EdgeStats>;
+  best_category: string;
+  worst_category: string;
+  market_entry_timing: string;
+  avg_market_age_at_entry: number;
+  scales_in: boolean;
+  scales_out: boolean;
+  avg_trades_per_market: number;
+  uses_both_sides: boolean;
+  profitable_patterns: string[];
+  unprofitable_patterns: string[];
+  summary: string;
+  key_edges: string[];
+  weaknesses: string[];
+  replication_tips: string[];
+}
+
+export interface ProfileHistoryEntry {
+  id: number;
+  username: string;
+  wallet: string;
+  total_trades: number;
+  total_volume: number;
+  total_return_pct: number | null;
+  win_rate: number | null;
+  sharpe_ratio: number | null;
+  analyzed_at: string;
+  notes: string | null;
 }

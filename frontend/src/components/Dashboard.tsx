@@ -10,6 +10,7 @@ import SizeDistribution from "./SizeDistribution";
 import StrengthsWeaknesses from "./StrengthsWeaknesses";
 import TopMarkets from "./TopMarkets";
 import Recommendations from "./Recommendations";
+import StrategyProfile from "./StrategyProfile";
 
 interface Props {
   data: AnalyzeResponse;
@@ -17,7 +18,7 @@ interface Props {
 }
 
 export default function Dashboard({ data, onReset }: Props) {
-  const { profile, analysis, backtest, report } = data;
+  const { profile, analysis, backtest, report, strategy } = data;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-8">
@@ -67,6 +68,9 @@ export default function Dashboard({ data, onReset }: Props) {
 
       {/* Backtest Metrics */}
       {backtest && <BacktestMetrics backtest={backtest} />}
+
+      {/* Strategy Profile */}
+      {strategy && <StrategyProfile strategy={strategy} />}
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">

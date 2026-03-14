@@ -7,8 +7,11 @@ Run:
 """
 
 import asyncio
+import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +21,9 @@ from profile_analyzer.fetcher import fetch_and_cache, load_trades
 from profile_analyzer.patterns import analyze_patterns
 from profile_analyzer.backtest import run_backtest, compare_to_baseline
 from profile_analyzer.report import generate_report
+from profile_analyzer.strategy import analyze_strategy
+
+DB_PATH = "profile_history.db"
 
 app = FastAPI(title="Polymarket Trade Analyzer API")
 
@@ -29,12 +35,108 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------------------
+# Database helpers
+# ---------------------------------------------------------------------------
+
+def _init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS profile_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                wallet TEXT UNIQUE,
+                total_trades INTEGER,
+                total_volume REAL,
+                total_return_pct REAL,
+                win_rate REAL,
+                sharpe_ratio REAL,
+                analyzed_at TEXT,
+                notes TEXT
+            )
+        """)
+        conn.commit()
+
+
+@contextmanager
+def _get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _upsert_profile(
+    username: str,
+    wallet: str,
+    total_trades: int,
+    total_volume: float,
+    total_return_pct: Optional[float],
+    win_rate: Optional[float],
+    sharpe_ratio: Optional[float],
+):
+    now = datetime.now(timezone.utc).isoformat()
+    with _get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO profile_history
+                (username, wallet, total_trades, total_volume,
+                 total_return_pct, win_rate, sharpe_ratio, analyzed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(wallet) DO UPDATE SET
+                username = excluded.username,
+                total_trades = excluded.total_trades,
+                total_volume = excluded.total_volume,
+                total_return_pct = excluded.total_return_pct,
+                win_rate = excluded.win_rate,
+                sharpe_ratio = excluded.sharpe_ratio,
+                analyzed_at = excluded.analyzed_at
+            """,
+            (username, wallet, total_trades, total_volume,
+             total_return_pct, win_rate, sharpe_ratio, now),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
 class AnalyzeRequest(BaseModel):
     profile: str
     backtest: bool = True
     max_trades: Optional[int] = None
     capital: float = 10000.0
 
+
+class SaveHistoryRequest(BaseModel):
+    username: str
+    wallet: str
+    total_trades: int
+    total_volume: float
+    total_return_pct: Optional[float] = None
+    win_rate: Optional[float] = None
+    sharpe_ratio: Optional[float] = None
+
+
+class UpdateNotesRequest(BaseModel):
+    notes: str
+
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+def on_startup():
+    _init_db()
+
+
+# ---------------------------------------------------------------------------
+# Analyze endpoint (existing, with auto-save)
+# ---------------------------------------------------------------------------
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
@@ -63,6 +165,20 @@ async def analyze(req: AnalyzeRequest):
         baseline = compare_to_baseline(trades, backtest_result)
 
     report = generate_report(analysis, backtest=backtest_result)
+
+    # Strategy analysis
+    strategy_profile = analyze_strategy(trades, analysis, backtest=backtest_result)
+
+    # Auto-save to history
+    _upsert_profile(
+        username=profile.username or "",
+        wallet=profile.wallet_address,
+        total_trades=analysis.total_trades,
+        total_volume=analysis.total_volume_usdc,
+        total_return_pct=backtest_result.total_return_pct if backtest_result else None,
+        win_rate=backtest_result.win_rate if backtest_result else None,
+        sharpe_ratio=backtest_result.sharpe_ratio if backtest_result else None,
+    )
 
     # Serialize market summaries (top 20)
     market_summaries = []
@@ -172,7 +288,86 @@ async def analyze(req: AnalyzeRequest):
             "key_stats": report.key_stats,
             "recommendations": report.recommendations,
         },
+        "strategy": {
+            "strategy_type": strategy_profile.strategy_type,
+            "confidence": strategy_profile.confidence,
+            "avg_entry_price": strategy_profile.avg_entry_price,
+            "entry_price_distribution": strategy_profile.entry_price_distribution,
+            "prefers_underdogs": strategy_profile.prefers_underdogs,
+            "prefers_favorites": strategy_profile.prefers_favorites,
+            "avg_time_in_market": strategy_profile.avg_time_in_market,
+            "quick_flipper": strategy_profile.quick_flipper,
+            "long_holder": strategy_profile.long_holder,
+            "edge_by_category": strategy_profile.edge_by_category,
+            "edge_by_price_range": strategy_profile.edge_by_price_range,
+            "best_category": strategy_profile.best_category,
+            "worst_category": strategy_profile.worst_category,
+            "market_entry_timing": strategy_profile.market_entry_timing,
+            "avg_market_age_at_entry": strategy_profile.avg_market_age_at_entry,
+            "scales_in": strategy_profile.scales_in,
+            "scales_out": strategy_profile.scales_out,
+            "avg_trades_per_market": strategy_profile.avg_trades_per_market,
+            "uses_both_sides": strategy_profile.uses_both_sides,
+            "profitable_patterns": strategy_profile.profitable_patterns,
+            "unprofitable_patterns": strategy_profile.unprofitable_patterns,
+            "summary": strategy_profile.summary,
+            "key_edges": strategy_profile.key_edges,
+            "weaknesses": strategy_profile.weaknesses,
+            "replication_tips": strategy_profile.replication_tips,
+        },
     }
+
+
+# ---------------------------------------------------------------------------
+# History endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/history")
+async def get_history():
+    with _get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM profile_history ORDER BY analyzed_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/history")
+async def save_history(req: SaveHistoryRequest):
+    _upsert_profile(
+        username=req.username,
+        wallet=req.wallet,
+        total_trades=req.total_trades,
+        total_volume=req.total_volume,
+        total_return_pct=req.total_return_pct,
+        win_rate=req.win_rate,
+        sharpe_ratio=req.sharpe_ratio,
+    )
+    return {"status": "saved"}
+
+
+@app.delete("/api/history/{profile_id}")
+async def delete_history(profile_id: int):
+    with _get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM profile_history WHERE id = ?", (profile_id,)
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "deleted"}
+
+
+@app.patch("/api/history/{profile_id}/notes")
+async def update_notes(profile_id: int, req: UpdateNotesRequest):
+    with _get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE profile_history SET notes = ? WHERE id = ?",
+            (req.notes, profile_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "updated"}
 
 
 @app.get("/api/health")
