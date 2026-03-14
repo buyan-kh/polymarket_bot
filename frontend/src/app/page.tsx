@@ -5,6 +5,7 @@ import { AnalyzeResponse } from "@/types";
 import Dashboard from "@/components/Dashboard";
 import SearchHero from "@/components/SearchHero";
 import LoadingState from "@/components/LoadingState";
+import ProfileHistory from "@/components/ProfileHistory";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -47,7 +48,12 @@ export default function Home() {
   return (
     <main className="relative z-10 min-h-screen">
       {!data && !loading && (
-        <SearchHero onSearch={handleAnalyze} error={error} />
+        <div className="flex flex-col min-h-screen">
+          <SearchHero onSearch={handleAnalyze} error={error} />
+          <div className="px-6 pb-12">
+            <ProfileHistory onSelectProfile={handleAnalyze} />
+          </div>
+        </div>
       )}
       {loading && <LoadingState />}
       {data && <Dashboard data={data} onReset={handleReset} />}
