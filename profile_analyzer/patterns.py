@@ -44,12 +44,13 @@ class MarketSummary:
 @dataclass
 class TimingPattern:
     """When the user tends to trade."""
-    most_active_hours: list  # list of (hour, count)
+    most_active_hours: list  # list of (hour, count) — all 24 hours
     most_active_days: list  # list of (weekday_name, count)
     avg_trades_per_day: float
     busiest_date: str
     busiest_date_count: int
     trading_streak_days: int  # longest consecutive days of trading
+    daily_hours: dict = field(default_factory=dict)  # {date_str: {hour: count}}
 
 
 @dataclass
@@ -98,7 +99,8 @@ class AnalysisResult:
     avg_entry_price: float = 0.0  # overall average buy price
     avg_exit_price: float = 0.0  # overall average sell price
     buy_sell_spread: float = 0.0  # avg_exit - avg_entry (edge measure)
-    top_market_win_rate: float = 0.0  # % of top 10 markets (by volume) that are profitable
+    top_market_win_rate: float = 0.0  # % of all resolved/known-PnL markets that are profitable
+    resolved_market_count: int = 0  # how many markets have known PnL
     top_market_results: list = field(default_factory=list)  # [(title, pnl, volume)] for top 10
     pct_extreme_buys: float = 0.0  # % of buys at < 0.20 or > 0.80
     extreme_buy_markets: list = field(default_factory=list)  # markets with extreme-price entries
@@ -254,8 +256,16 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
     day_counts = Counter(ts.strftime("%A") for ts in valid_ts)
     date_counts = Counter(ts.strftime("%Y-%m-%d") for ts in valid_ts)
 
-    most_active_hours = hour_counts.most_common(5)
+    most_active_hours = sorted(hour_counts.items())  # all 24 hours, sorted
     most_active_days = day_counts.most_common(7)
+
+    # Per-date hourly breakdown
+    daily_hours: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    for ts in valid_ts:
+        date_str = ts.strftime("%Y-%m-%d")
+        daily_hours[date_str][ts.hour] += 1
+    # Convert to plain dicts for serialization
+    daily_hours_plain = {d: dict(h) for d, h in daily_hours.items()}
     busiest_date, busiest_count = date_counts.most_common(1)[0] if date_counts else ("N/A", 0)
 
     # Trading streak
@@ -282,6 +292,7 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
         busiest_date=busiest_date,
         busiest_date_count=busiest_count,
         trading_streak_days=max_streak,
+        daily_hours=daily_hours_plain,
     )
 
     # --- Sizing patterns ---
@@ -317,26 +328,12 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
 
     price_ranges = Counter()
     for p in buy_prices:
-        if p < 0.10:
-            price_ranges["$0.00-$0.10"] += 1
-        elif p < 0.20:
-            price_ranges["$0.10-$0.20"] += 1
-        elif p < 0.30:
-            price_ranges["$0.20-$0.30"] += 1
-        elif p < 0.40:
-            price_ranges["$0.30-$0.40"] += 1
-        elif p < 0.50:
-            price_ranges["$0.40-$0.50"] += 1
-        elif p < 0.60:
-            price_ranges["$0.50-$0.60"] += 1
-        elif p < 0.70:
-            price_ranges["$0.60-$0.70"] += 1
-        elif p < 0.80:
-            price_ranges["$0.70-$0.80"] += 1
-        elif p < 0.90:
-            price_ranges["$0.80-$0.90"] += 1
-        else:
-            price_ranges["$0.90-$1.00"] += 1
+        # Bucket into 0.05 increments
+        bucket = min(int(p / 0.05), 19)  # 0-19 for 0.00-1.00
+        low = bucket * 0.05
+        high = low + 0.05
+        label = f"{low:.2f}-{high:.2f}"
+        price_ranges[label] += 1
 
     below_50 = len([p for p in buy_prices if p < 0.50])
     above_50 = len([p for p in buy_prices if p >= 0.50])
@@ -400,13 +397,12 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
     avg_exit = sum(sell_prices) / len(sell_prices) if sell_prices else 0.0
     buy_sell_spread = avg_exit - avg_entry
 
-    # Top market win rate (% of top 10 by volume that are profitable)
-    # Only count markets with known PnL (resolved or has sells)
-    top_10 = market_list[:10]
-    top_10_known = [m for m in top_10 if m.is_resolved or m.sell_count > 0]
-    top_market_results = [(m.title, m.estimated_pnl, m.total_volume) for m in top_10_known]
-    profitable_top = sum(1 for m in top_10_known if m.estimated_pnl > 0)
-    top_market_win_rate = (profitable_top / len(top_10_known) * 100) if top_10_known else 0.0
+    # Win rate across ALL resolved/known-PnL markets
+    all_known = [m for m in market_list if m.is_resolved or m.sell_count > 0]
+    profitable_known = sum(1 for m in all_known if m.estimated_pnl > 0)
+    top_market_win_rate = (profitable_known / len(all_known) * 100) if all_known else 0.0
+    # Top market results for report (top 10 by volume, known-PnL only)
+    top_market_results = [(m.title, m.estimated_pnl, m.total_volume) for m in all_known[:10]]
 
     # Extreme buys (< 0.20 or > 0.80)
     extreme_buys = [p for p in buy_prices if p < 0.20 or p > 0.80]
@@ -480,6 +476,7 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
         avg_exit_price=avg_exit,
         buy_sell_spread=buy_sell_spread,
         top_market_win_rate=top_market_win_rate,
+        resolved_market_count=len(all_known),
         top_market_results=top_market_results,
         pct_extreme_buys=pct_extreme,
         extreme_buy_markets=extreme_buy_market_data,

@@ -43,6 +43,7 @@ export interface AnalyzeResponse {
     top_markets_by_trades: [string, number][];
     market_summaries: MarketSummary[];
     top_market_win_rate: number;
+    resolved_market_count: number;
   };
   report: ReportData;
   strategy: StrategyProfileData;

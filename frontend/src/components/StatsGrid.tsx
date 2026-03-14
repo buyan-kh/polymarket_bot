@@ -20,17 +20,19 @@ export default function StatsGrid({ analysis }: Props) {
     ? "more trades exist"
     : `${analysis.timing.avg_trades_per_day.toFixed(1)}/day`;
 
+  const wr = analysis.top_market_win_rate;
+  const resolved = analysis.resolved_market_count || 0;
+  const wrSub = resolved > 0
+    ? `${resolved} resolved market${resolved !== 1 ? "s" : ""}`
+    : "no resolved markets yet";
   const stats = [
     { label: "Total Trades", value: tradesDisplay, sub: tradesPerDaySub },
     { label: "Volume", value: fmt(analysis.total_volume_usdc), sub: `avg ${fmt(analysis.sizing.avg_trade_size_usdc)}/trade` },
-    { label: "Markets", value: analysis.unique_markets.toLocaleString(), sub: `${analysis.avg_trades_per_market.toFixed(1)} trades/mkt` },
-    { label: "Buy/Sell", value: analysis.buy_sell_ratio.toFixed(2), sub: analysis.buy_sell_ratio > 1.5 ? "buy heavy" : "balanced" },
-    { label: "Streak", value: `${analysis.timing.trading_streak_days}d`, sub: `busiest: ${analysis.timing.busiest_date_count} trades` },
-    { label: "Concentration", value: (analysis.market_concentration * 100).toFixed(1) + "%", sub: analysis.market_concentration < 0.05 ? "diversified" : "concentrated" },
+    { label: "Win Rate", value: resolved > 0 ? `${wr.toFixed(1)}%` : "--", sub: wrSub },
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
       {stats.map((s, i) => (
         <div key={s.label}
           className="card-glow p-4 animate-fade-up"

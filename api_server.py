@@ -250,6 +250,7 @@ async def analyze(req: AnalyzeRequest):
             "top_markets_by_trades": analysis.top_markets_by_trades,
             "market_summaries": market_summaries,
             "top_market_win_rate": analysis.top_market_win_rate,
+            "resolved_market_count": analysis.resolved_market_count,
         },
         "report": {
             "summary": report.summary,
