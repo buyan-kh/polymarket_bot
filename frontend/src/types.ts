@@ -19,6 +19,7 @@ export interface AnalyzeResponse {
       busiest_date: string;
       busiest_date_count: number;
       trading_streak_days: number;
+      daily_hours: Record<string, Record<string, number>>;
     };
     sizing: {
       avg_trade_size_usdc: number;
@@ -41,9 +42,8 @@ export interface AnalyzeResponse {
     top_markets_by_volume: [string, number][];
     top_markets_by_trades: [string, number][];
     market_summaries: MarketSummary[];
+    top_market_win_rate: number;
   };
-  backtest: BacktestData | null;
-  baseline: BaselineData | null;
   report: ReportData;
   strategy: StrategyProfileData;
 }
@@ -59,46 +59,6 @@ export interface MarketSummary {
   avg_sell_price: number;
   estimated_pnl: number;
   outcomes_traded: string[];
-}
-
-export interface BacktestData {
-  initial_capital: number;
-  final_value: number;
-  total_return_pct: number;
-  total_pnl: number;
-  max_drawdown_pct: number;
-  peak_value: number;
-  num_trades: number;
-  num_winning_trades: number;
-  num_losing_trades: number;
-  win_rate: number;
-  avg_win: number;
-  avg_loss: number;
-  profit_factor: number;
-  sharpe_ratio: number;
-  sortino_ratio: number;
-  avg_trade_pnl: number;
-  largest_win: number;
-  largest_loss: number;
-  snapshots: PortfolioSnapshot[];
-  daily_returns: number[];
-}
-
-export interface PortfolioSnapshot {
-  timestamp: string;
-  cash: number;
-  positions_value: number;
-  total_value: number;
-  trade_count: number;
-}
-
-export interface BaselineData {
-  user_total_pnl: number;
-  user_return_pct: number;
-  inverse_estimated_pnl: number;
-  random_baseline_pnl: number;
-  beats_random: boolean;
-  edge_vs_random: number;
 }
 
 export interface ReportData {
@@ -161,4 +121,5 @@ export interface ProfileHistoryEntry {
   sharpe_ratio: number | null;
   analyzed_at: string;
   notes: string | null;
+  pinned: boolean;
 }

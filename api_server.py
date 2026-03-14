@@ -52,9 +52,15 @@ def _init_db():
                 win_rate REAL,
                 sharpe_ratio REAL,
                 analyzed_at TEXT,
-                notes TEXT
+                notes TEXT,
+                pinned INTEGER DEFAULT 0
             )
         """)
+        # Add pinned column if missing (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE profile_history ADD COLUMN pinned INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
 
 
@@ -220,6 +226,7 @@ async def analyze(req: AnalyzeRequest):
                 "busiest_date": analysis.timing.busiest_date,
                 "busiest_date_count": analysis.timing.busiest_date_count,
                 "trading_streak_days": analysis.timing.trading_streak_days,
+                "daily_hours": analysis.timing.daily_hours,
             },
             "sizing": {
                 "avg_trade_size_usdc": analysis.sizing.avg_trade_size_usdc,
@@ -242,6 +249,7 @@ async def analyze(req: AnalyzeRequest):
             "top_markets_by_volume": analysis.top_markets_by_volume,
             "top_markets_by_trades": analysis.top_markets_by_trades,
             "market_summaries": market_summaries,
+            "top_market_win_rate": analysis.top_market_win_rate,
         },
         "report": {
             "summary": report.summary,
@@ -336,6 +344,32 @@ async def update_notes(profile_id: int, req: UpdateNotesRequest):
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Profile not found")
     return {"status": "updated"}
+
+
+@app.patch("/api/history/{profile_id}/pin")
+async def toggle_pin(profile_id: int):
+    with _get_db() as conn:
+        row = conn.execute(
+            "SELECT pinned FROM profile_history WHERE id = ?", (profile_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        new_val = 0 if row["pinned"] else 1
+        conn.execute(
+            "UPDATE profile_history SET pinned = ? WHERE id = ?",
+            (new_val, profile_id),
+        )
+        conn.commit()
+    return {"status": "pinned" if new_val else "unpinned", "pinned": bool(new_val)}
+
+
+@app.get("/api/pinned")
+async def get_pinned():
+    with _get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM profile_history WHERE pinned = 1 ORDER BY analyzed_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/health")
