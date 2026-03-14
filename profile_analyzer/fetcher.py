@@ -253,6 +253,112 @@ def load_trades(filepath: str | Path) -> list[Trade]:
     return [Trade(**t) for t in data]
 
 
+async def fetch_market_resolutions(
+    condition_ids: list[str],
+    session: aiohttp.ClientSession,
+    progress_callback=None,
+) -> dict[str, float]:
+    """
+    Look up settlement prices for markets via the Gamma API.
+
+    Returns a dict of {condition_id: settlement_price} where settlement_price
+    is 1.0 if the YES outcome won, 0.0 if NO won, or absent if still active.
+    Only resolved markets are included.
+    """
+    settlements: dict[str, float] = {}
+    unique_ids = list(set(condition_ids))
+
+    if progress_callback:
+        progress_callback(f"Looking up resolution status for {len(unique_ids)} markets...")
+
+    # Batch requests — Gamma API accepts one condition_id at a time
+    batch_size = 20
+    for i in range(0, len(unique_ids), batch_size):
+        batch = unique_ids[i:i + batch_size]
+        tasks = []
+        for cid in batch:
+            tasks.append(_fetch_single_resolution(cid, session))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for cid, result in zip(batch, results):
+            if isinstance(result, (int, float)):
+                settlements[cid] = result
+
+        if progress_callback and i + batch_size < len(unique_ids):
+            progress_callback(f"Resolved {min(i + batch_size, len(unique_ids))}/{len(unique_ids)} markets...")
+
+        # Rate limit
+        await asyncio.sleep(0.2)
+
+    if progress_callback:
+        progress_callback(f"Found {len(settlements)} resolved markets out of {len(unique_ids)} total")
+
+    return settlements
+
+
+async def _fetch_single_resolution(
+    condition_id: str,
+    session: aiohttp.ClientSession,
+) -> Optional[float]:
+    """Fetch resolution for a single market from Gamma API."""
+    try:
+        url = f"{GAMMA_API_BASE}/markets"
+        params = {"condition_id": condition_id}
+        async with session.get(url, params=params) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+
+        if not data:
+            return None
+
+        # data is a list of markets matching this condition
+        market = data[0] if isinstance(data, list) else data
+
+        # Check if market is resolved
+        if not market.get("closed", False):
+            return None
+
+        # Check for explicit payout info
+        # The "tokens" field contains outcome info with winner/price
+        tokens = market.get("tokens", [])
+        if tokens:
+            for token in tokens:
+                outcome = token.get("outcome", "")
+                winner = token.get("winner", False)
+                if winner and outcome.lower() == "yes":
+                    return 1.0
+                elif winner and outcome.lower() == "no":
+                    return 0.0
+
+        # Fallback: check end_date_iso and if market is closed with a resolved price
+        # If closed but no winner info, check if there's a resolution price
+        resolution_price = market.get("resolutionPrice")
+        if resolution_price is not None:
+            return float(resolution_price)
+
+        # Market is closed but we can't determine the settlement
+        # Look at the last price as a heuristic (if very close to 0 or 1)
+        last_price = market.get("lastTradePrice") or market.get("outcomePrices")
+        if isinstance(last_price, str):
+            try:
+                # outcomePrices is often a JSON string like "[0.95, 0.05]"
+                import json as _json
+                prices = _json.loads(last_price)
+                if isinstance(prices, list) and len(prices) >= 1:
+                    yes_price = float(prices[0])
+                    if yes_price > 0.95:
+                        return 1.0
+                    elif yes_price < 0.05:
+                        return 0.0
+            except (ValueError, TypeError):
+                pass
+
+        return None
+    except Exception:
+        return None
+
+
 async def fetch_and_cache(
     profile_input: str,
     max_trades: Optional[int] = None,

@@ -78,8 +78,11 @@ def run_backtest(
         trades: List of trades to replay
         initial_capital: Starting capital in USDC
         settlement_prices: Optional dict of {condition_id: settlement_price}
-            If not provided, uses sell trades to estimate exits.
+            where 1.0 = YES won, 0.0 = NO won.  Positions in resolved markets
+            are settled at the correct payout.
     """
+    settlement_prices = settlement_prices or {}
+
     # Sort by timestamp
     sorted_trades = sorted(trades, key=lambda t: t.timestamp)
 
@@ -129,10 +132,20 @@ def run_backtest(
                 # Short sell or untracked position
                 trade_pnls.append(0)
 
-        # Estimate current portfolio value
-        positions_value = sum(
-            p.quantity * p.avg_entry for p in positions.values()
-        )
+        # Estimate current portfolio value — use settlement for resolved
+        # markets, otherwise value at avg_entry (cost basis as conservative estimate)
+        positions_value = 0.0
+        for p in positions.values():
+            cid = p.condition_id
+            if cid in settlement_prices:
+                # Resolved market: value at settlement payout
+                sp = settlement_prices[cid]
+                if p.outcome and p.outcome.lower() == "yes":
+                    positions_value += p.quantity * sp
+                else:
+                    positions_value += p.quantity * (1.0 - sp)
+            else:
+                positions_value += p.quantity * p.avg_entry
         total_value = cash + positions_value
 
         # Track peak and drawdown
@@ -159,19 +172,24 @@ def run_backtest(
             date_str = ts.strftime("%Y-%m-%d")
             daily_values[date_str] = total_value
 
-    # Apply settlement prices if provided
-    if settlement_prices:
-        for key, pos in list(positions.items()):
-            cid = pos.condition_id
-            if cid in settlement_prices:
-                settlement = settlement_prices[cid]
-                revenue = pos.quantity * settlement
-                pnl = revenue - pos.cost_basis
-                trade_pnls.append(pnl)
-                market_pnl[cid] = market_pnl.get(cid, 0) + pnl
-                cash += revenue
+    # Settle all resolved positions
+    for key, pos in list(positions.items()):
+        cid = pos.condition_id
+        if cid in settlement_prices:
+            sp = settlement_prices[cid]
+            # Compute payout based on outcome
+            if pos.outcome and pos.outcome.lower() == "yes":
+                payout_per_share = sp
+            else:
+                payout_per_share = 1.0 - sp
+            revenue = pos.quantity * payout_per_share
+            pnl = revenue - pos.cost_basis
+            trade_pnls.append(pnl)
+            market_pnl[cid] = market_pnl.get(cid, 0) + pnl
+            cash += revenue
+            del positions[key]
 
-    # Final value
+    # Final value — remaining positions are unresolved, value at cost basis
     remaining_positions = sum(p.quantity * p.avg_entry for p in positions.values())
     final_value = cash + remaining_positions
 

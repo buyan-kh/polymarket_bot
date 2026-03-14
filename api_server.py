@@ -17,7 +17,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from profile_analyzer.fetcher import fetch_and_cache, load_trades
+from profile_analyzer.fetcher import fetch_and_cache, load_trades, fetch_market_resolutions
+import aiohttp
 from profile_analyzer.patterns import analyze_patterns
 from profile_analyzer.backtest import run_backtest, compare_to_baseline
 from profile_analyzer.report import generate_report
@@ -151,17 +152,27 @@ async def analyze(req: AnalyzeRequest):
     if not trades:
         raise HTTPException(status_code=404, detail="No trades found for this profile")
 
+    # Fetch market resolution data to correctly compute PnL
+    condition_ids = list(set(t.condition_id for t in trades if t.condition_id))
+    try:
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            settlements = await fetch_market_resolutions(condition_ids, session)
+    except Exception:
+        settlements = {}  # Graceful degradation — use old method if resolution lookup fails
+
     analysis = analyze_patterns(
         trades,
         username=profile.username,
         wallet=profile.wallet_address,
         trades_capped=trades_capped,
+        settlements=settlements,
     )
 
     backtest_result = None
     baseline = None
     if req.backtest:
-        backtest_result = run_backtest(trades, initial_capital=req.capital)
+        backtest_result = run_backtest(trades, initial_capital=req.capital, settlement_prices=settlements)
         baseline = compare_to_baseline(trades, backtest_result)
 
     report = generate_report(analysis, backtest=backtest_result)
