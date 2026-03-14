@@ -81,13 +81,6 @@ def generate_report(
         ))
         recommendations.append("Consider spreading volume across more markets to reduce concentration risk.")
 
-    if analysis.unique_markets > 50:
-        pros.append(ProCon(
-            category="Diversification",
-            observation="Wide market coverage",
-            detail=f"Traded in {analysis.unique_markets} unique markets, showing breadth of analysis.",
-        ))
-
     # --- TIMING ---
     if analysis.timing.trading_streak_days > 30:
         pros.append(ProCon(
