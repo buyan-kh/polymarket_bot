@@ -77,9 +77,9 @@ def run_backtest(
     Args:
         trades: List of trades to replay
         initial_capital: Starting capital in USDC
-        settlement_prices: Optional dict of {condition_id: settlement_price}
-            where 1.0 = YES won, 0.0 = NO won.  Positions in resolved markets
-            are settled at the correct payout.
+        settlement_prices: Optional dict of {condition_id: {outcome: price}}
+            e.g. {"0xabc": {"Over": 1.0, "Under": 0.0}}.
+            Positions in resolved markets are settled at outcome-specific payouts.
     """
     settlement_prices = settlement_prices or {}
 
@@ -138,12 +138,9 @@ def run_backtest(
         for p in positions.values():
             cid = p.condition_id
             if cid in settlement_prices:
-                # Resolved market: value at settlement payout
-                sp = settlement_prices[cid]
-                if p.outcome and p.outcome.lower() == "yes":
-                    positions_value += p.quantity * sp
-                else:
-                    positions_value += p.quantity * (1.0 - sp)
+                outcome_prices = settlement_prices[cid]
+                payout = outcome_prices.get(p.outcome, 0.0)
+                positions_value += p.quantity * payout
             else:
                 positions_value += p.quantity * p.avg_entry
         total_value = cash + positions_value
@@ -176,12 +173,8 @@ def run_backtest(
     for key, pos in list(positions.items()):
         cid = pos.condition_id
         if cid in settlement_prices:
-            sp = settlement_prices[cid]
-            # Compute payout based on outcome
-            if pos.outcome and pos.outcome.lower() == "yes":
-                payout_per_share = sp
-            else:
-                payout_per_share = 1.0 - sp
+            outcome_prices = settlement_prices[cid]
+            payout_per_share = outcome_prices.get(pos.outcome, 0.0)
             revenue = pos.quantity * payout_per_share
             pnl = revenue - pos.cost_basis
             trade_pnls.append(pnl)

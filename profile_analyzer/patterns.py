@@ -153,13 +153,13 @@ def _stddev(values: list[float]) -> float:
     return variance ** 0.5
 
 
-def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", trades_capped: bool = False, settlements: Optional[dict[str, float]] = None) -> AnalysisResult:
+def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", trades_capped: bool = False, settlements: Optional[dict] = None) -> AnalysisResult:
     """
     Run full pattern analysis on a list of trades.
 
     Args:
-        settlements: Optional dict of {condition_id: settlement_price} for
-            resolved markets.  1.0 = YES won, 0.0 = NO won.
+        settlements: Optional dict of {condition_id: {outcome_name: price}}
+            for resolved markets. e.g. {"0xabc": {"Over": 1.0, "Under": 0.0}}.
             Used to correctly compute PnL for positions held to resolution.
     """
     if not trades:
@@ -203,17 +203,18 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
         if sell_trades:
             m.avg_sell_price = sum(t.price for t in sell_trades) / len(sell_trades)
         # PnL calculation:
-        # If market has resolved, unsold shares get settlement value
-        # (1.0 for YES win, 0.0 for NO win).
+        # If market has resolved, unsold shares get settlement value.
+        # settlements format: {condition_id: {outcome_name: price}}
         # If market is still active, PnL = sells - buys (only realized).
         total_bought_usdc = sum(t.usdc_size for t in buy_trades)
         total_sold_usdc = sum(t.usdc_size for t in sell_trades)
-        realized_pnl = total_sold_usdc - total_bought_usdc
 
         cid = m.condition_id or m.slug
         if cid in settlements:
             # Market resolved — compute settlement value for net position
-            # Net position per outcome
+            outcome_prices = settlements[cid]  # e.g. {"Over": 1.0, "Under": 0.0}
+
+            # Net shares held per outcome
             outcome_positions: dict[str, float] = {}
             for t in buy_trades + sell_trades:
                 oc = t.outcome or "Yes"
@@ -222,20 +223,18 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
                 else:
                     outcome_positions[oc] = outcome_positions.get(oc, 0) - t.size
 
-            settlement_price = settlements[cid]
             settlement_value = 0.0
             for oc, qty in outcome_positions.items():
                 if qty > 0:  # still holding shares
-                    if oc.lower() == "yes":
-                        settlement_value += qty * settlement_price
-                    else:
-                        settlement_value += qty * (1.0 - settlement_price)
+                    # Look up the settlement price for this specific outcome
+                    settle_price = outcome_prices.get(oc, 0.0)
+                    settlement_value += qty * settle_price
 
-            # Total PnL = realized from sells + settlement of remaining shares - total cost
+            # Total PnL = cash from sells + settlement of remaining - total cost
             m.estimated_pnl = total_sold_usdc + settlement_value - total_bought_usdc
         else:
             # Market still active or unknown — only count realized P&L
-            m.estimated_pnl = realized_pnl
+            m.estimated_pnl = total_sold_usdc - total_bought_usdc
 
     market_list = sorted(markets.values(), key=lambda m: m.total_volume, reverse=True)
 

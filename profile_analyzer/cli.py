@@ -167,13 +167,13 @@ async def async_main(args):
         sys.exit(1)
 
     # Fetch market resolution data for correct PnL
-    condition_ids = list(set(t.condition_id for t in trades if t.condition_id))
     settlements = {}
     try:
         print_progress("Fetching market resolution data...")
         timeout = aiohttp.ClientTimeout(total=120)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            settlements = await fetch_market_resolutions(condition_ids, session, progress_callback=print_progress)
+        headers = {"Accept-Encoding": "gzip, deflate"}
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            settlements = await fetch_market_resolutions(trades, session, progress_callback=print_progress)
     except Exception as e:
         print_progress(f"Warning: Could not fetch resolutions ({e}), PnL may be inaccurate")
 

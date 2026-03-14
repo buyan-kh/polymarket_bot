@@ -254,56 +254,69 @@ def load_trades(filepath: str | Path) -> list[Trade]:
 
 
 async def fetch_market_resolutions(
-    condition_ids: list[str],
+    trades: list[Trade],
     session: aiohttp.ClientSession,
     progress_callback=None,
-) -> dict[str, float]:
+) -> dict[str, dict[str, float]]:
     """
     Look up settlement prices for markets via the Gamma API.
 
-    Returns a dict of {condition_id: settlement_price} where settlement_price
-    is 1.0 if the YES outcome won, 0.0 if NO won, or absent if still active.
-    Only resolved markets are included.
+    Returns a dict of:
+        {condition_id: {outcome_name: settlement_price, ...}}
+
+    For example, a resolved Over/Under market where Over won:
+        {"0xabc...": {"Over": 1.0, "Under": 0.0}}
+
+    Only resolved (closed) markets are included.
+    Uses slug-based lookup since condition_id queries are unreliable.
     """
-    settlements: dict[str, float] = {}
-    unique_ids = list(set(condition_ids))
+    # Build slug -> condition_id mapping from trades
+    slug_to_cid: dict[str, str] = {}
+    for t in trades:
+        if t.slug and t.condition_id:
+            slug_to_cid[t.slug] = t.condition_id
+
+    unique_slugs = list(slug_to_cid.keys())
+    settlements: dict[str, dict[str, float]] = {}
 
     if progress_callback:
-        progress_callback(f"Looking up resolution status for {len(unique_ids)} markets...")
+        progress_callback(f"Looking up resolution status for {len(unique_slugs)} markets...")
 
-    # Batch requests — Gamma API accepts one condition_id at a time
     batch_size = 20
-    for i in range(0, len(unique_ids), batch_size):
-        batch = unique_ids[i:i + batch_size]
-        tasks = []
-        for cid in batch:
-            tasks.append(_fetch_single_resolution(cid, session))
+    for i in range(0, len(unique_slugs), batch_size):
+        batch = unique_slugs[i:i + batch_size]
+        tasks = [_fetch_single_resolution(slug, session) for slug in batch]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for cid, result in zip(batch, results):
-            if isinstance(result, (int, float)):
+        for slug, result in zip(batch, results):
+            if isinstance(result, dict) and result:
+                cid = slug_to_cid[slug]
                 settlements[cid] = result
 
-        if progress_callback and i + batch_size < len(unique_ids):
-            progress_callback(f"Resolved {min(i + batch_size, len(unique_ids))}/{len(unique_ids)} markets...")
+        if progress_callback and (i + batch_size) % 100 == 0:
+            progress_callback(f"Checked {min(i + batch_size, len(unique_slugs))}/{len(unique_slugs)} markets...")
 
         # Rate limit
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.15)
 
     if progress_callback:
-        progress_callback(f"Found {len(settlements)} resolved markets out of {len(unique_ids)} total")
+        progress_callback(f"Found {len(settlements)} resolved markets out of {len(unique_slugs)} total")
 
     return settlements
 
 
 async def _fetch_single_resolution(
-    condition_id: str,
+    slug: str,
     session: aiohttp.ClientSession,
-) -> Optional[float]:
-    """Fetch resolution for a single market from Gamma API."""
+) -> Optional[dict[str, float]]:
+    """
+    Fetch resolution for a single market by slug from Gamma API.
+
+    Returns {outcome_name: settlement_price} or None if not resolved.
+    """
     try:
         url = f"{GAMMA_API_BASE}/markets"
-        params = {"condition_id": condition_id}
+        params = {"slug": slug}
         async with session.get(url, params=params) as resp:
             if resp.status != 200:
                 return None
@@ -312,49 +325,45 @@ async def _fetch_single_resolution(
         if not data:
             return None
 
-        # data is a list of markets matching this condition
         market = data[0] if isinstance(data, list) else data
 
-        # Check if market is resolved
+        # Must be closed
         if not market.get("closed", False):
             return None
 
-        # Check for explicit payout info
-        # The "tokens" field contains outcome info with winner/price
-        tokens = market.get("tokens", [])
-        if tokens:
-            for token in tokens:
-                outcome = token.get("outcome", "")
-                winner = token.get("winner", False)
-                if winner and outcome.lower() == "yes":
-                    return 1.0
-                elif winner and outcome.lower() == "no":
-                    return 0.0
+        # Get outcomes list and their settlement prices
+        # outcomes: ["Over", "Under"] or ["Yes", "No"]
+        # outcomePrices: ["1", "0"] — maps 1:1 with outcomes
+        outcomes = market.get("outcomes")
+        outcome_prices_raw = market.get("outcomePrices")
 
-        # Fallback: check end_date_iso and if market is closed with a resolved price
-        # If closed but no winner info, check if there's a resolution price
-        resolution_price = market.get("resolutionPrice")
-        if resolution_price is not None:
-            return float(resolution_price)
+        if not outcomes or not outcome_prices_raw:
+            return None
 
-        # Market is closed but we can't determine the settlement
-        # Look at the last price as a heuristic (if very close to 0 or 1)
-        last_price = market.get("lastTradePrice") or market.get("outcomePrices")
-        if isinstance(last_price, str):
-            try:
-                # outcomePrices is often a JSON string like "[0.95, 0.05]"
-                import json as _json
-                prices = _json.loads(last_price)
-                if isinstance(prices, list) and len(prices) >= 1:
-                    yes_price = float(prices[0])
-                    if yes_price > 0.95:
-                        return 1.0
-                    elif yes_price < 0.05:
-                        return 0.0
-            except (ValueError, TypeError):
-                pass
+        # Parse outcomes (could be JSON string or list)
+        if isinstance(outcomes, str):
+            outcomes = json.loads(outcomes)
+        if isinstance(outcome_prices_raw, str):
+            outcome_prices_raw = json.loads(outcome_prices_raw)
 
-        return None
+        if not isinstance(outcomes, list) or not isinstance(outcome_prices_raw, list):
+            return None
+        if len(outcomes) != len(outcome_prices_raw):
+            return None
+
+        # Parse prices
+        try:
+            prices = [float(p) for p in outcome_prices_raw]
+        except (ValueError, TypeError):
+            return None
+
+        # Only return if at least one outcome settled at 0 or 1
+        # (otherwise market might still be active with live prices)
+        if not any(p >= 0.95 or p <= 0.05 for p in prices):
+            return None
+
+        return {outcome: price for outcome, price in zip(outcomes, prices)}
+
     except Exception:
         return None
 

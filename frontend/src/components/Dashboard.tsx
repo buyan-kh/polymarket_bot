@@ -2,8 +2,6 @@
 
 import { AnalyzeResponse } from "@/types";
 import StatsGrid from "./StatsGrid";
-import BacktestMetrics from "./BacktestMetrics";
-import PortfolioChart from "./PortfolioChart";
 import CategoryChart from "./CategoryChart";
 import TimingHeatmap from "./TimingHeatmap";
 import SizeDistribution from "./SizeDistribution";
@@ -18,7 +16,7 @@ interface Props {
 }
 
 export default function Dashboard({ data, onReset }: Props) {
-  const { profile, analysis, backtest, report, strategy } = data;
+  const { profile, analysis, report, strategy } = data;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-8">
@@ -66,20 +64,16 @@ export default function Dashboard({ data, onReset }: Props) {
       {/* Key Stats */}
       <StatsGrid analysis={analysis} />
 
-      {/* Backtest Metrics */}
-      {backtest && <BacktestMetrics backtest={backtest} />}
-
       {/* Strategy Profile */}
       {strategy && <StrategyProfile strategy={strategy} />}
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {backtest && <PortfolioChart snapshots={backtest.snapshots} />}
         <CategoryChart categories={analysis.category_breakdown} />
+        <TimingHeatmap hours={analysis.timing.most_active_hours} days={analysis.timing.most_active_days} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <TimingHeatmap hours={analysis.timing.most_active_hours} days={analysis.timing.most_active_days} />
         <SizeDistribution buckets={analysis.sizing.size_buckets} priceRanges={analysis.pricing.favorite_price_ranges} />
       </div>
 

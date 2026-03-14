@@ -20,7 +20,6 @@ from pydantic import BaseModel
 from profile_analyzer.fetcher import fetch_and_cache, load_trades, fetch_market_resolutions
 import aiohttp
 from profile_analyzer.patterns import analyze_patterns
-from profile_analyzer.backtest import run_backtest, compare_to_baseline
 from profile_analyzer.report import generate_report
 from profile_analyzer.strategy import analyze_strategy
 
@@ -107,9 +106,7 @@ def _upsert_profile(
 
 class AnalyzeRequest(BaseModel):
     profile: str
-    backtest: bool = True
     max_trades: Optional[int] = None
-    capital: float = 10000.0
 
 
 class SaveHistoryRequest(BaseModel):
@@ -153,11 +150,11 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=404, detail="No trades found for this profile")
 
     # Fetch market resolution data to correctly compute PnL
-    condition_ids = list(set(t.condition_id for t in trades if t.condition_id))
     try:
         timeout = aiohttp.ClientTimeout(total=120)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            settlements = await fetch_market_resolutions(condition_ids, session)
+        headers = {"Accept-Encoding": "gzip, deflate"}
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            settlements = await fetch_market_resolutions(trades, session)
     except Exception:
         settlements = {}  # Graceful degradation — use old method if resolution lookup fails
 
@@ -169,16 +166,10 @@ async def analyze(req: AnalyzeRequest):
         settlements=settlements,
     )
 
-    backtest_result = None
-    baseline = None
-    if req.backtest:
-        backtest_result = run_backtest(trades, initial_capital=req.capital, settlement_prices=settlements)
-        baseline = compare_to_baseline(trades, backtest_result)
-
-    report = generate_report(analysis, backtest=backtest_result)
+    report = generate_report(analysis)
 
     # Strategy analysis
-    strategy_profile = analyze_strategy(trades, analysis, backtest=backtest_result)
+    strategy_profile = analyze_strategy(trades, analysis)
 
     # Auto-save to history
     _upsert_profile(
@@ -186,9 +177,9 @@ async def analyze(req: AnalyzeRequest):
         wallet=profile.wallet_address,
         total_trades=analysis.total_trades,
         total_volume=analysis.total_volume_usdc,
-        total_return_pct=backtest_result.total_return_pct if backtest_result else None,
-        win_rate=backtest_result.win_rate if backtest_result else None,
-        sharpe_ratio=backtest_result.sharpe_ratio if backtest_result else None,
+        total_return_pct=None,
+        win_rate=None,
+        sharpe_ratio=None,
     )
 
     # Serialize market summaries (top 20)
@@ -206,18 +197,6 @@ async def analyze(req: AnalyzeRequest):
             "estimated_pnl": m.estimated_pnl,
             "outcomes_traded": m.outcomes_traded,
         })
-
-    # Serialize backtest snapshots
-    snapshots = []
-    if backtest_result:
-        for s in backtest_result.portfolio_snapshots:
-            snapshots.append({
-                "timestamp": s.timestamp,
-                "cash": s.cash,
-                "positions_value": s.positions_value,
-                "total_value": s.total_value,
-                "trade_count": s.trade_count,
-            })
 
     return {
         "profile": {
@@ -263,29 +242,6 @@ async def analyze(req: AnalyzeRequest):
             "top_markets_by_trades": analysis.top_markets_by_trades,
             "market_summaries": market_summaries,
         },
-        "backtest": {
-            "initial_capital": backtest_result.initial_capital,
-            "final_value": backtest_result.final_value,
-            "total_return_pct": backtest_result.total_return_pct,
-            "total_pnl": backtest_result.total_pnl,
-            "max_drawdown_pct": backtest_result.max_drawdown_pct,
-            "peak_value": backtest_result.peak_value,
-            "num_trades": backtest_result.num_trades,
-            "num_winning_trades": backtest_result.num_winning_trades,
-            "num_losing_trades": backtest_result.num_losing_trades,
-            "win_rate": backtest_result.win_rate,
-            "avg_win": backtest_result.avg_win,
-            "avg_loss": backtest_result.avg_loss,
-            "profit_factor": backtest_result.profit_factor,
-            "sharpe_ratio": backtest_result.sharpe_ratio,
-            "sortino_ratio": backtest_result.sortino_ratio,
-            "avg_trade_pnl": backtest_result.avg_trade_pnl,
-            "largest_win": backtest_result.largest_win,
-            "largest_loss": backtest_result.largest_loss,
-            "snapshots": snapshots,
-            "daily_returns": backtest_result.daily_returns,
-        } if backtest_result else None,
-        "baseline": baseline,
         "report": {
             "summary": report.summary,
             "pros": [
