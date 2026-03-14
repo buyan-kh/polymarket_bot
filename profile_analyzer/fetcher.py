@@ -157,7 +157,7 @@ async def fetch_all_trades(
             "user": wallet_address,
             "limit": batch_size,
             "offset": offset,
-            "takerOnly": "false",
+            "takerOnly": "true",
         }
 
         retry_count = 0
