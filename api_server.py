@@ -25,6 +25,19 @@ from profile_analyzer.strategy import analyze_strategy
 
 DB_PATH = "profile_history.db"
 
+
+def _weighted_win_rate(edge_by_price_range: dict) -> float:
+    """Weighted average win rate across price ranges, weighted by trade count."""
+    total_trades = 0
+    weighted_sum = 0.0
+    for stats in edge_by_price_range.values():
+        t = stats.get("trades", 0)
+        wr = stats.get("win_rate", 0)
+        if t > 0:
+            weighted_sum += wr * t
+            total_trades += t
+    return round(weighted_sum / total_trades, 1) if total_trades > 0 else 0.0
+
 app = FastAPI(title="Polymarket Trade Analyzer API")
 
 app.add_middleware(
@@ -251,6 +264,7 @@ async def analyze(req: AnalyzeRequest):
             "market_summaries": market_summaries,
             "top_market_win_rate": analysis.top_market_win_rate,
             "resolved_market_count": analysis.resolved_market_count,
+            "weighted_win_rate": _weighted_win_rate(strategy_profile.edge_by_price_range),
         },
         "report": {
             "summary": report.summary,

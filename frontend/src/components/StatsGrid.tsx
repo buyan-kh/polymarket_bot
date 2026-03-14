@@ -20,15 +20,11 @@ export default function StatsGrid({ analysis }: Props) {
     ? "more trades exist"
     : `${analysis.timing.avg_trades_per_day.toFixed(1)}/day`;
 
-  const wr = analysis.top_market_win_rate;
-  const resolved = analysis.resolved_market_count || 0;
-  const wrSub = resolved > 0
-    ? `${resolved} resolved market${resolved !== 1 ? "s" : ""}`
-    : "no resolved markets yet";
+  const wr = analysis.weighted_win_rate;
   const stats = [
     { label: "Total Trades", value: tradesDisplay, sub: tradesPerDaySub },
     { label: "Volume", value: fmt(analysis.total_volume_usdc), sub: `avg ${fmt(analysis.sizing.avg_trade_size_usdc)}/trade` },
-    { label: "Win Rate", value: resolved > 0 ? `${wr.toFixed(1)}%` : "--", sub: wrSub },
+    { label: "Win Rate", value: wr > 0 ? `${wr.toFixed(1)}%` : "--", sub: `across ${analysis.resolved_market_count} resolved` },
   ];
 
   return (

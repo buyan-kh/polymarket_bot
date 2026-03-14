@@ -44,6 +44,7 @@ export interface AnalyzeResponse {
     market_summaries: MarketSummary[];
     top_market_win_rate: number;
     resolved_market_count: number;
+    weighted_win_rate: number;
   };
   report: ReportData;
   strategy: StrategyProfileData;
