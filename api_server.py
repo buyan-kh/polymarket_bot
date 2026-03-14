@@ -195,6 +195,7 @@ async def analyze(req: AnalyzeRequest):
             "avg_buy_price": m.avg_buy_price,
             "avg_sell_price": m.avg_sell_price,
             "estimated_pnl": m.estimated_pnl,
+            "is_resolved": m.is_resolved,
             "outcomes_traded": m.outcomes_traded,
         })
 

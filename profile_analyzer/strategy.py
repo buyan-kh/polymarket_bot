@@ -207,22 +207,25 @@ def analyze_strategy(
     # ------------------------------------------------------------------ #
     # 6. Edge by category
     # ------------------------------------------------------------------ #
-    # Build per-market pnl from backtest or from analysis market_summaries
+    # Build per-market pnl from analysis market_summaries
+    # Only include markets with known PnL (resolved or has sells)
     per_market_pnl: dict[str, float] = {}
-    if backtest and backtest.market_results:
-        per_market_pnl = dict(backtest.market_results)
-    else:
-        for ms in analysis.market_summaries:
-            key = ms.condition_id or ms.slug
+    known_pnl_markets: set[str] = set()
+    for ms in analysis.market_summaries:
+        key = ms.condition_id or ms.slug
+        if ms.is_resolved or ms.sell_count > 0:
             per_market_pnl[key] = ms.estimated_pnl
+            known_pnl_markets.add(key)
 
-    # Map market -> category, accumulate stats
+    # Map market -> category, accumulate stats (only for known-PnL markets)
     cat_stats: dict[str, dict] = defaultdict(lambda: {"trades": 0, "pnl": 0.0, "wins": 0, "total_markets": 0})
     market_categories: dict[str, str] = {}
     for mkey, mtrades in market_trades.items():
         title = mtrades[0].title if mtrades else ""
         cat = _classify_category(title)
         market_categories[mkey] = cat
+        if mkey not in known_pnl_markets:
+            continue  # skip markets with unknown PnL (open, no sells)
         pnl = per_market_pnl.get(mkey, 0.0)
         cs = cat_stats[cat]
         cs["trades"] += len(mtrades)
@@ -265,14 +268,14 @@ def analyze_strategy(
         for label, _, _ in price_range_labels
     }
 
-    # Group buy trades by market and price range
+    # Group buy trades by market and price range (only known-PnL markets for PnL)
     market_pr_seen: dict[str, set] = defaultdict(set)  # market -> set of price ranges seen
     for t in buy_trades:
         mkey = t.condition_id or t.slug
         for label, lo, hi in price_range_labels:
             if lo <= t.price < hi:
                 pr_stats[label]["trades"] += 1
-                if label not in market_pr_seen[mkey]:
+                if mkey in known_pnl_markets and label not in market_pr_seen[mkey]:
                     market_pr_seen[mkey].add(label)
                     # Attribute a proportional share of market pnl
                     pnl = per_market_pnl.get(mkey, 0.0)

@@ -38,6 +38,7 @@ class MarketSummary:
     first_trade: Optional[str] = None
     last_trade: Optional[str] = None
     outcomes_traded: list = field(default_factory=list)
+    is_resolved: bool = False  # whether the market has settled
 
 
 @dataclass
@@ -232,9 +233,16 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
 
             # Total PnL = cash from sells + settlement of remaining - total cost
             m.estimated_pnl = total_sold_usdc + settlement_value - total_bought_usdc
+            m.is_resolved = True
         else:
-            # Market still active or unknown — only count realized P&L
-            m.estimated_pnl = total_sold_usdc - total_bought_usdc
+            # Market still active — only count realized P&L from actual sells
+            # If there are no sells, PnL is unknown (not negative!)
+            if sell_trades:
+                m.estimated_pnl = total_sold_usdc - total_bought_usdc
+            else:
+                # No sells and no resolution = position is open, PnL is unknown
+                m.estimated_pnl = 0.0
+            m.is_resolved = False
 
     market_list = sorted(markets.values(), key=lambda m: m.total_volume, reverse=True)
 
@@ -393,10 +401,12 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
     buy_sell_spread = avg_exit - avg_entry
 
     # Top market win rate (% of top 10 by volume that are profitable)
+    # Only count markets with known PnL (resolved or has sells)
     top_10 = market_list[:10]
-    top_market_results = [(m.title, m.estimated_pnl, m.total_volume) for m in top_10]
-    profitable_top = sum(1 for m in top_10 if m.estimated_pnl > 0)
-    top_market_win_rate = (profitable_top / len(top_10) * 100) if top_10 else 0.0
+    top_10_known = [m for m in top_10 if m.is_resolved or m.sell_count > 0]
+    top_market_results = [(m.title, m.estimated_pnl, m.total_volume) for m in top_10_known]
+    profitable_top = sum(1 for m in top_10_known if m.estimated_pnl > 0)
+    top_market_win_rate = (profitable_top / len(top_10_known) * 100) if top_10_known else 0.0
 
     # Extreme buys (< 0.20 or > 0.80)
     extreme_buys = [p for p in buy_prices if p < 0.20 or p > 0.80]
@@ -418,9 +428,11 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
     std_size = _stddev(sizes)
     sizing_cv = std_size / avg_size if avg_size > 0 else 0.0
 
-    # Category PnL - map each market to its category and sum pnl
+    # Category PnL - only count markets with known PnL
     cat_pnl: dict[str, float] = defaultdict(float)
     for m in market_list:
+        if not m.is_resolved and m.sell_count == 0:
+            continue  # skip open positions with no sells — PnL is unknown
         title_lower = (m.title or "").lower()
         if any(w in title_lower for w in ["bitcoin", "btc", "crypto", "eth", "ethereum", "solana", "sol"]):
             cat = "Crypto"
@@ -438,9 +450,10 @@ def analyze_patterns(trades: list[Trade], username: str = "", wallet: str = "", 
             cat = "Other"
         cat_pnl[cat] += m.estimated_pnl
 
-    # Concentrated market PnL (top 3 markets)
-    concentrated_pnl = sum(m.estimated_pnl for m in market_list[:3])
-    total_est_pnl = sum(m.estimated_pnl for m in market_list)
+    # Concentrated market PnL (top 3 markets — only known PnL)
+    known_pnl_markets = [m for m in market_list if m.is_resolved or m.sell_count > 0]
+    concentrated_pnl = sum(m.estimated_pnl for m in known_pnl_markets[:3])
+    total_est_pnl = sum(m.estimated_pnl for m in known_pnl_markets)
 
     return AnalysisResult(
         username=username,
